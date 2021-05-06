@@ -8,10 +8,21 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/gophercises/quiet_hn/hn"
+	"quiet_hn/hn"
 )
+
+type count32 int32
+
+func (c *count32) inc() int32 {
+	return atomic.AddInt32((*int32)(c), 1)
+}
+
+func (c *count32) get() int32 {
+	return atomic.LoadInt32((*int32)(c))
+}
 
 func main() {
 	// parse flags
@@ -37,30 +48,63 @@ func handler(numStories int, tpl *template.Template) http.HandlerFunc {
 			http.Error(w, "Failed to load top stories", http.StatusInternalServerError)
 			return
 		}
+
 		var stories []item
+		c1 := make(chan int, 1)
+
 		for _, id := range ids {
-			hnItem, err := client.GetItem(id)
-			if err != nil {
-				continue
-			}
-			item := parseHNItem(hnItem)
-			if isStoryLink(item) {
-				stories = append(stories, item)
-				if len(stories) >= numStories {
-					break
-				}
-			}
+			go collectStories(id, client, &stories, c1)
 		}
-		data := templateData{
-			Stories: stories,
-			Time:    time.Now().Sub(start),
-		}
-		err = tpl.Execute(w, data)
-		if err != nil {
-			http.Error(w, "Failed to process the template", http.StatusInternalServerError)
-			return
+
+		go trackItemsCounter(&stories, c1)
+		// sort.Slice(stories, func(i, j int) bool {
+		// 	return stories[i].ID > stories[j].ID
+		// })
+
+		select {
+		case <-c1:
+			renderTemplate(stories, start, tpl, w)
+		case <-time.After(time.Duration(5 * time.Second)):
+			renderTemplate(stories, start, tpl, w)
 		}
 	})
+}
+
+func renderTemplate(stories []item, start time.Time, tpl *template.Template, w http.ResponseWriter) {
+	data := templateData{
+		Stories: stories,
+		Time:    time.Now().Sub(start),
+	}
+	err := tpl.Execute(w, data)
+	if err != nil {
+		http.Error(w, "Failed to process the template", http.StatusInternalServerError)
+		return
+	}
+}
+
+func trackItemsCounter(stories *[]item, c1 chan int) {
+	for len(*stories) < 30 {
+		time.Sleep(time.Duration(time.Millisecond * 10))
+	}
+	c1 <- 1
+}
+
+func collectStories(id int, client hn.Client, stories *[]item, c1 chan int) {
+	hnItem, err := client.GetItem(id)
+
+	if err != nil {
+		return
+	}
+
+	item := parseHNItem(hnItem)
+
+	if isStoryLink(item) {
+		if len(*stories) >= 30 {
+			c1 <- 0
+			return
+		}
+		*stories = append(*stories, item)
+	}
 }
 
 func isStoryLink(item item) bool {
