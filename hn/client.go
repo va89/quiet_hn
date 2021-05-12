@@ -83,4 +83,7 @@ type Item struct {
 	// Only one of these should exist
 	Text string `json:"text"`
 	URL  string `json:"url"`
+
+	// Show order (this is the item id order in which it received from API)
+	Order int
 }

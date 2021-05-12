@@ -6,7 +6,7 @@ package hn_test
 import (
 	"fmt"
 
-	"github.com/gophercises/quiet_hn/hn"
+	"quiet_hn/hn"
 )
 
 func ExampleClient() {
